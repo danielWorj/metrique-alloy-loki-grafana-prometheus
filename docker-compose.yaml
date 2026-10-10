@@ -1,0 +1,45 @@
+services:
+  # ---- POSTGRES ----
+  postgres: # service de la base de données PostgreSQL
+    image: postgres:17-alpine
+    container_name: imc-postgres # nom du conteneur
+    restart: unless-stopped
+    environment: # variables d'environnement
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes: # stockage persistant
+      - imc-pgdata:/var/lib/postgresql/data
+    networks: [applications-network] # réseau auquel appartient le service
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # ---- API ----
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile # Dockerfile qui build le projet
+    container_name: imc-api # nom du conteneur de l'API
+    restart: unless-stopped
+    env_file: .env # chemin des variables d'environnement
+    environment:
+      DB_HOST: postgres
+      DB_PORT: "5432"
+    ports: # port sur lequel tourne l'API
+      - "${SERVER_PORT}:${SERVER_PORT}"
+    depends_on: # services dont dépend l'API, ici postgres
+      postgres:
+        condition: service_healthy # à condition que postgres soit opérationnel
+    networks: [applications-network] # réseau auquel appartient l'API
+
+# ---- VOLUMES ----
+volumes:
+  imc-pgdata:
+
+# ---- RESEAU ----
+networks:
+  applications-network:
+    name: applications-network
