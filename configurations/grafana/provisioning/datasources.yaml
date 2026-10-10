@@ -1,0 +1,24 @@
+# =====================================================================
+#  GRAFANA : l'écran. Il ne stocke aucune donnée d'observabilité.
+# =====================================================================
+#  Ce fichier "provisioning" déclare les sources de données au démarrage,
+#  pour ne pas avoir à les ajouter à la main dans l'interface.
+#  Grafana lit ce dossier automatiquement (monté dans le compose).
+#  Les URLs utilisent les noms de service Docker (loki, prometheus).
+# =====================================================================
+
+apiVersion: 1
+
+datasources: # d'ou proviennent les données affichées dans Grafana (Prometheus, Loki, etc.)
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy              # Grafana (côté serveur) interroge Prometheus
+    url: http://prometheus:9090
+    isDefault: true
+
+  - name: Loki
+    uid: loki
+    type: loki
+    access: proxy
+    url: http://loki:3100

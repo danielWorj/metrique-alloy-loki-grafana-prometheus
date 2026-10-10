@@ -1,0 +1,112 @@
+
+// ---------------------------------------------------------------------
+//  PARTIE 1 : LES LOGS  (Docker ──► Loki)
+// ---------------------------------------------------------------------
+
+// 1) DÉCOUVERTE : "quels conteneurs tournent ?"
+//    Alloy interroge le démon Docker via le socket monté dans le compose
+//    (/var/run/docker.sock). Il obtient la liste des conteneurs, chacun avec
+//    des infos "brutes" préfixées par __meta_docker_... (nom, labels compose...).
+
+// le mot <<discover>> permet de découvrir les conteneurs docker en cours d'exécution et de récupérer leurs métadonnées.
+//Ces métadonnées sont ensuite utilisées pour étiqueter les logs et les métriques afin de faciliter leur filtrage et leur analyse dans Grafana.
+discovery.docker "conteneurs" {
+	host = "unix:///var/run/docker.sock" // ou sont stockés les logs des conteneurs docker
+}
+
+// 2) ÉTIQUETAGE : transformer les infos brutes en labels Loki lisibles.
+//    Les labels servent à filtrer dans Grafana : {service="api"}.
+//    Ici on n'envoie PAS de targets (targets = []) : on utilise seulement
+//    la propriété ".rules" de ce composant, qu'on donne à loki.source.docker.
+discovery.relabel "labels_docker" {
+	targets = []
+	// Nom du conteneur Docker : "/imc-api" -> container="imc-api"
+	// ce bloc permet de transformer le nom du conteneur docker en un label lisible pour Loki, en supprimant le slash initial.
+	rule {
+
+		source_labels = ["__meta_docker_container_name"] //nom de base
+		regex         = "/(.*)" // on applique les regex pour supprimer le slash initial du nom du conteneur
+		target_label  = "container" // on lui donne ce nouveau nom de label "container"
+	}
+
+	// Nom du service dans docker-compose.yaml : "api", "postgres", ...
+	rule {
+	    // le mot <<source_labels>> sert à spécifier les labels sources à partir desquels on va extraire les informations
+	    // pour créer de nouveaux labels.
+	    //Dans ce cas, on utilise le label source "__meta_docker_container_label_com_docker_compose_service" qui contient le nom du service
+	    // défini dans le fichier docker-compose.yaml.
+		source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+		target_label  = "service"
+	}
+}
+
+// 3) LECTURE : lire stdout/stderr de chaque conteneur découvert.
+//    Spring Boot écrit ses logs sur la console => Docker les capture => Alloy les lit.
+// Ici on recupere les logs envoye par Alloy
+loki.source.docker "logs" {
+	host          = "unix:///var/run/docker.sock" // ou sont les logs docker
+	targets       = discovery.docker.conteneurs.targets // les conteneurs decouverts par Alloy
+	relabel_rules = discovery.relabel.labels_docker.rules // les labels à appliquer à chaque log (service, container...)
+	labels        = {env = "dev"} // label ajouté à TOUS les logs
+	forward_to    = [loki.process.traitement.receiver] // les logs sont envoyés à l'étape suivante (traitement) pour être transformés avant envoi à Loki
+}
+
+// 4) TRAITEMENT : transformer les lignes avant de les envoyer.
+//    L'API écrit ses logs en JSON (voir LOGGING_STRUCTURED_FORMAT_CONSOLE
+//    dans le compose). On en extrait le niveau (INFO, ERROR...) pour en
+//    faire un label. Les autres conteneurs (postgres...) ne sont pas touchés.
+loki.process "traitement" {
+	stage.match { // recherche les logs qui correspondent à un certain critère (ici, le label "service" = "api")
+		selector = "{service=\"api\"}"
+
+		// On lit le JSON de la ligne et on récupère le champ "level"
+		stage.json {
+			expressions = {level = "level"}
+		}
+
+		// ...puis on le transforme en label Loki : {level="ERROR"}
+		// (peu de valeurs possibles => pas de problème de cardinalité)
+		stage.labels {
+		// ici on transforme le champ "level" du JSON en un label Loki avec le même nom "level".
+			values = {level = ""}
+		}
+	}
+
+	forward_to = [loki.write.local.receiver] // on ecrit les logs transformés dans Loki
+}
+
+// 5) ENVOI : pousser les logs vers Loki (nom de service Docker = "loki").
+loki.write "local" {
+	endpoint {
+		url = "http://loki:3100/loki/api/v1/push"
+	}
+}
+
+// ---------------------------------------------------------------------
+//  PARTIE 2 : LES MÉTRIQUES  (API ──► Prometheus)
+// ---------------------------------------------------------------------
+
+// 1) SCRAPE : Alloy appelle régulièrement l'endpoint de métriques de l'API
+//    (c'est le même principe que Prometheus, mais fait par Alloy).
+//    Le port vient de la variable SERVER_PORT, passée à Alloy par le compose.
+//    Attention au préfixe /api : c'est le context-path défini dans application.yaml.
+prometheus.scrape "api" {
+    // prometheus scrape ici les métriques exposées par l'API Spring Boot via l'endpoint /api/actuator/prometheus.
+    // Alloy va interroger cet endpoint toutes les 15 secondes pour récupérer les métriques et les envoyer à Prometheus.
+	targets = [{
+		"__address__" = "api:" + sys.env("SERVER_PORT"),
+		"job"         = "api",
+		"application" = "metriquegrafana",
+	}]
+	metrics_path    = "/api/actuator/prometheus"
+	scrape_interval = "15s"
+	forward_to      = [prometheus.remote_write.local.receiver] // On ecrit ces netriques dans prometheus
+}
+
+// 2) ENVOI : pousser les métriques dans Prometheus (remote write).
+//    Prometheus doit être lancé avec --web.enable-remote-write-receiver.
+prometheus.remote_write "local" {
+	endpoint {
+		url = "http://prometheus:9090/api/v1/write"
+	}
+}

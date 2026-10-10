@@ -28,6 +28,8 @@ services:
     environment:
       DB_HOST: postgres
       DB_PORT: "5432"
+      # Logs en JSON sur la console : Alloy peut ainsi en extraire le niveau (level)
+      LOGGING_STRUCTURED_FORMAT_CONSOLE: logstash
     ports: # port sur lequel tourne l'API
       - "${SERVER_PORT}:${SERVER_PORT}"
     depends_on: # services dont dépend l'API, ici postgres
@@ -35,9 +37,82 @@ services:
         condition: service_healthy # à condition que postgres soit opérationnel
     networks: [applications-network] # réseau auquel appartient l'API
 
+  # =====================  OBSERVABILITE  =====================
+
+  # ---- LOKI : stocke les logs ----
+  loki:
+    image: grafana/loki:3.5.0
+    container_name: imc-loki
+    restart: unless-stopped
+    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - ./configurations/loki/local-config.yaml:/etc/loki/local-config.yaml:ro
+      - imc-loki-data:/loki # les logs survivent aux redémarrages
+    ports:
+      - "3100:3100" # exposé pour pouvoir tester avec curl (pas obligatoire)
+    networks: [applications-network]
+
+  # ---- PROMETHEUS : stocke les métriques ----
+  prometheus:
+    image: prom/prometheus:v3.4.0
+    container_name: imc-prometheus
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=7d
+      - --web.enable-remote-write-receiver # permet à Alloy d'y envoyer les métriques
+    volumes:
+      - ./configurations/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - imc-prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+    networks: [applications-network]
+
+  # ---- ALLOY : collecte les logs et les métriques, puis les envoie ----
+  alloy:
+    image: grafana/alloy:v1.9.0
+    container_name: imc-alloy
+    restart: unless-stopped
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345 # interface web d'Alloy
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+    environment:
+      SERVER_PORT: ${SERVER_PORT} # lu dans config.alloy via sys.env("SERVER_PORT")
+    volumes:
+      - ./configurations/alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro # pour lire les logs des conteneurs
+      - imc-alloy-data:/var/lib/alloy/data
+    ports:
+      - "12345:12345"
+    depends_on: [loki, prometheus]
+    networks: [applications-network]
+
+  # ---- GRAFANA : affiche logs et métriques ----
+  grafana:
+    image: grafana/grafana:12.0.0
+    container_name: imc-grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+    volumes:
+      - ./configurations/grafana/provisioning:/etc/grafana/provisioning:ro
+      - imc-grafana-data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    depends_on: [loki, prometheus]
+    networks: [applications-network]
+
 # ---- VOLUMES ----
 volumes:
   imc-pgdata:
+  imc-loki-data:
+  imc-prometheus-data:
+  imc-alloy-data:
+  imc-grafana-data:
 
 # ---- RESEAU ----
 networks:

@@ -1,0 +1,50 @@
+# =====================================================================
+#  LOKI : la base de données de LOGS
+# =====================================================================
+#  Loki reçoit les logs d'Alloy (POST /loki/api/v1/push), les stocke,
+#  et répond aux requêtes de Grafana (langage LogQL).
+#  Particularité : Loki n'indexe QUE les labels ({service="api"}), pas le
+#  contenu des lignes => léger et peu coûteux.
+#  Ici : mode "monolithe" (un seul process) avec stockage sur disque.
+# =====================================================================
+
+auth_enabled: false            # un seul "tenant", pas d'authentification (dev)
+
+server:
+  http_listen_port: 3100       # port d'écoute (Alloy et Grafana s'y connectent)
+
+common:
+  instance_addr: 127.0.0.1
+  path_prefix: /loki           # dossier racine (= volume Docker loki-data)
+  replication_factor: 1        # une seule instance, donc pas de réplication
+  ring:
+    kvstore:
+      store: inmemory          # pas de cluster => pas besoin de Consul/etcd
+  storage:
+    filesystem:
+      chunks_directory: /loki/chunks
+      rules_directory: /loki/rules
+
+# Comment les logs sont rangés sur le disque (schéma moderne recommandé)
+schema_config:
+  configs:
+    - from: 2024-04-01 # date à partir de laquelle ce schéma est utilisé
+      store: tsdb              # type d'index, tsdb signifie "Time Series Database"
+      object_store: filesystem # les données vont sur le disque local
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h
+
+# Nettoyage automatique : on garde 7 jours de logs
+limits_config:
+  retention_period: 168h
+
+compactor:
+  working_directory: /loki/compactor
+  retention_enabled: true
+  delete_request_store: filesystem
+
+# Pas de télémétrie envoyée à Grafana Labs
+analytics:
+  reporting_enabled: false

@@ -1,0 +1,18 @@
+# =====================================================================
+#  PROMETHEUS : la base de données de MÉTRIQUES
+# =====================================================================
+#  Dans ce projet, ce n'est pas Prometheus qui va chercher les métriques
+#  de l'API : c'est Alloy qui les scrape et les POUSSE ici (remote write).
+#  Prometheus est donc lancé avec --web.enable-remote-write-receiver
+#  (voir docker-compose.yaml).
+#
+#  Il surveille seulement lui-même, ce qui permet de vérifier qu'il vit.
+# =====================================================================
+
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

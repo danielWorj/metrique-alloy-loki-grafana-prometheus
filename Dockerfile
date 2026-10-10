@@ -20,10 +20,11 @@ USER spring:spring
 
 COPY --from=build /app/target/*.jar app.jar
 
-EXPOSE 8282
+EXPOSE 8382
 
 # curl n'existe pas en alpine JRE par défaut : le healthcheck utilise wget (busybox)
+# Le context-path de l'application est /api, donc l'URL complète est /api/actuator/health
 HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
-  CMD wget -qO- http://localhost:${SERVER_PORT:-8282}/actuator/health || exit 1
+  CMD wget -qO- http://localhost:${SERVER_PORT:-8382}/api/actuator/health || exit 1
 
 ENTRYPOINT ["java", "-XX:MaxRAMPercentage=75", "-jar", "app.jar"]

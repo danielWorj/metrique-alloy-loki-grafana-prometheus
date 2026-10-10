@@ -25,3 +25,14 @@ server:
   servlet:
     context-path: /api
   port: ${SERVER_PORT}
+
+# Observabilité : quels endpoints Actuator sont accessibles en HTTP
+# (avec le context-path : /api/actuator/health, /api/actuator/prometheus)
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  metrics:
+    tags:
+      application: ${spring.application.name}   # ajoute application="metriquegrafana" à chaque métrique
